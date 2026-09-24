@@ -1,0 +1,14 @@
+Shared pipeline for a Spring Boot service repo: build/test, build and push the Docker image to
+the local registry, then bump its image tag in url-shortener-gitops for ArgoCD to sync. See
+ADR-0008 in the docs repo for the design rationale (Poll SCM, Kubernetes agent pods, one shared
+library).
+
+Usage (the entire content of the consuming repo's Jenkinsfile):
+
+    buildSpringBootService(serviceName: 'url-service')
+
+Parameters:
+  serviceName  (required) The service's name, e.g. "url-service" - used as the GitOps values
+               directory (services/<serviceName>/values-local.yaml) and, unless dockerImage
+               overrides it, the image repository name.
+  dockerImage  (optional) The image repository name to build and push. Defaults to serviceName.
