@@ -1,0 +1,20 @@
+Shared pipeline for the shared-libs repo: build and test every module, then publish any module
+version that is not yet in GitHub Packages. See ADR-0004 and ADR-0008 in the docs repo.
+
+Every commit is built and tested, but a published release version is immutable in GitHub
+Packages, so the Publish stage first checks which modules already have the current version and
+publishes only the rest. Releasing is a deliberate version bump in the repo's build file; building
+an already-released version is a harmless no-op.
+
+Usage (the entire content of the consuming repo's Jenkinsfile):
+
+    publishSharedLib()
+
+Parameters (all optional):
+  repository  The GitHub repository whose package registry is published to, as "owner/name".
+              Defaults to codewithjams-url-shortener/url-shortener-shared-libs.
+  modules     The Gradle modules that are published. Defaults to links-contract,
+              event-contracts and service-common.
+
+Requires a Jenkins "username with password" credential with id github-packages-publish: a GitHub
+user and a token with read:packages and write:packages.
