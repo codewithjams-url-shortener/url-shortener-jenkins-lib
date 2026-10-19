@@ -21,7 +21,10 @@ def call(Map config) {
 
 	final String serviceName = config.serviceName
 	final String dockerImage = config.dockerImage ?: serviceName
-	final String registry = 'localhost:5100'
+	// Where the build pod pushes the image. The cluster pulls the same image as localhost:5100/<name> (the repository in
+	// each values-local.yaml), which its nodes' containerd maps to host.docker.internal:5100, but inside the build pod
+	// localhost is the pod itself, so the push goes to the address the registry is actually reachable on.
+	final String registry = 'host.docker.internal:5100'
 	final String gitOpsRepoHost = 'github.com/codewithjams-url-shortener/url-shortener-gitops.git'
 	final String gitOpsCredentialsId = 'gitops-repo-push'
 	// Read-only (read:packages): the services only resolve the shared libs from GitHub Packages. Their build files read
@@ -73,6 +76,13 @@ def call(Map config) {
 							}
 							env.IMAGE_TAG = env.GIT_COMMIT.take(7)
 						}
+						// The daemon is the dind sidecar's and takes a few seconds to start after the pod does.
+						sh '''
+							timeout 120 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done' || {
+								echo 'The Docker daemon in the dind sidecar did not start within 120s' >&2
+								exit 1
+							}
+						'''
 						// The Dockerfile's Gradle build reads the shared libs from GitHub Packages with these as BuildKit
 						// secrets. They are named by variable (env=), not passed by value, so the token never appears on
 						// the command line or in an image layer.
@@ -126,6 +136,12 @@ def call(Map config) {
 /**
  * Pod template for the ephemeral Kubernetes build agent (see ADR-0008): one container per
  * toolchain the stages above need, so each {@code container(...)} step runs in the right one.
+ *
+ * <p>The image build does not use the node's Docker socket: the cluster's nodes run containerd and have no Docker daemon,
+ * so a hostPath mount of /var/run/docker.sock is just an empty directory. Instead the pod runs its own daemon, the
+ * privileged {@code dind} sidecar, which the {@code docker} container reaches over localhost:2375 (no TLS, and nothing
+ * outside the pod can reach it). It trusts the local registry, which speaks plain HTTP, and its layers live in the pod's
+ * emptyDir, so they go away with the pod instead of piling up as build cache on the node.
  */
 private String podTemplateYaml() {
 	return """
@@ -141,16 +157,20 @@ spec:
       image: docker:24-cli
       command: ['sleep']
       args: ['infinity']
-      volumeMounts:
-        - name: docker-sock
-          mountPath: /var/run/docker.sock
+      env:
+        - name: DOCKER_HOST
+          value: tcp://localhost:2375
+    - name: dind
+      image: docker:24-dind
+      securityContext:
+        privileged: true
+      env:
+        - name: DOCKER_TLS_CERTDIR
+          value: ''
+      args: ['--insecure-registry=host.docker.internal:5100']
     - name: git
       image: alpine/git:2.45.2
       command: ['sleep']
       args: ['infinity']
-  volumes:
-    - name: docker-sock
-      hostPath:
-        path: /var/run/docker.sock
 """
 }

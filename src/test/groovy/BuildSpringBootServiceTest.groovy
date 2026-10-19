@@ -33,8 +33,71 @@ class BuildSpringBootServiceTest extends DeclarativePipelineTest {
 
 		// Assert
 		def imageBuild = shCommands().find { it.contains('docker buildx build') }
-		assertThat(imageBuild).contains('-t localhost:5100/url-service:abcdef0')
+		assertThat(imageBuild).contains('-t host.docker.internal:5100/url-service:abcdef0')
 		assertThat(imageBuild).doesNotContain('abcdef01')
+
+	}
+
+	@Test
+	void call_shouldPushToTheAddressThePodReachesTheRegistryOn_whenBuildingTheImage() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// Inside the build pod localhost is the pod itself, so a push to localhost:5100 would never reach the registry. The
+		// cluster still pulls the same image as localhost:5100/<name>, which its nodes map to this address, so the bump
+		// stage must not touch the repository in the GitOps values.
+		def imageBuild = shCommands().find { it.contains('docker buildx build') }
+		assertThat(imageBuild).contains('host.docker.internal:5100/url-service:').doesNotContain('localhost:5100')
+		def bump = shCommands().find { it.contains('git push') }
+		assertThat(bump).doesNotContain('5100').contains('.image.tag')
+
+	}
+
+	@Test
+	void call_shouldWaitForTheDaemonBeforeBuildingTheImage_whenTheDaemonIsASidecar() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// The dind sidecar takes a few seconds to start after the pod does, and a build that asks too early fails with
+		// "Cannot connect to the Docker daemon".
+		def commands = shCommands()
+		int wait = commands.findIndexOf { it.contains('docker info') }
+		int build = commands.findIndexOf { it.contains('docker buildx build') }
+		assertThat(wait).as('the pipeline waits for the daemon').isGreaterThanOrEqualTo(0)
+		assertThat(wait).as('and does so before the image build').isLessThan(build)
+		assertThat(commands[wait]).contains('timeout 120').contains('exit 1')
+
+	}
+
+	@Test
+	void call_shouldRunItsOwnDockerDaemonInThePod_whenBuildingTheImage() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		// JenkinsPipelineUnit does not record the declarative agent's yaml argument, so the template is read directly.
+		def podYaml = script.podTemplateYaml() as String
+
+		// Assert
+		// Regression: the pod used to mount the node's /var/run/docker.sock, but the cluster's nodes run containerd and have
+		// no Docker daemon, so the mount was an empty directory and every image build failed with "Cannot connect to the
+		// Docker daemon". The daemon is now a privileged sidecar the docker container reaches over localhost.
+		assertThat(podYaml).doesNotContain('docker.sock').doesNotContain('hostPath')
+		assertThat(podYaml).contains('name: dind').contains('image: docker:24-dind').contains('privileged: true')
+		assertThat(podYaml).contains('name: DOCKER_HOST').contains('tcp://localhost:2375')
+		// The sidecar trusts the registry, which speaks plain HTTP, and its address matches the one pushed to.
+		assertThat(podYaml).contains('--insecure-registry=host.docker.internal:5100')
 
 	}
 
@@ -87,7 +150,7 @@ class BuildSpringBootServiceTest extends DeclarativePipelineTest {
 		assertThat(shCommands.any { it.contains('./gradlew clean build') })
 				.as('Build & Test stage should run ./gradlew clean build')
 				.isTrue()
-		assertThat(shCommands.any { it.contains('docker buildx build') && it.contains('localhost:5100/url-service') })
+		assertThat(shCommands.any { it.contains('docker buildx build') && it.contains('host.docker.internal:5100/url-service') })
 				.as('Build & Push Image stage should push to the local registry')
 				.isTrue()
 		assertThat(shCommands.any { it.contains('services/url-service/values-local.yaml') && it.contains('git push') })
