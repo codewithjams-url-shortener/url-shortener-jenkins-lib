@@ -12,3 +12,12 @@ Parameters:
                directory (services/<serviceName>/values-local.yaml) and, unless dockerImage
                overrides it, the image repository name.
   dockerImage  (optional) The image repository name to build and push. Defaults to serviceName.
+
+Jenkins credentials it needs (Username with password):
+  github-packages-read  A GitHub user and a personal access token with read:packages only. The
+                        services resolve their shared libs from GitHub Packages, so it is bound as
+                        GITHUB_ACTOR and GITHUB_TOKEN for the Gradle build and passed to the Docker
+                        image build as the BuildKit secrets github_actor and github_token. Kept
+                        separate from github-packages-publish, which can overwrite the libs and is
+                        only for publishSharedLib.
+  gitops-repo-push      Push access to url-shortener-gitops, for the tag bump.

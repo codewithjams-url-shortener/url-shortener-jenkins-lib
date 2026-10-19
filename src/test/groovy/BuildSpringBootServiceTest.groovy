@@ -46,4 +46,138 @@ class BuildSpringBootServiceTest extends DeclarativePipelineTest {
 
 	}
 
+	@Test
+	void call_shouldRunTheGradleBuildWithTheGithubPackagesReadCredential_whenBuildingAndTesting() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// The services resolve the shared libs from GitHub Packages, so the build needs a token to read them.
+		assertThat(credentialBoundTo('./gradlew clean build')).isEqualTo('github-packages-read')
+
+	}
+
+	@Test
+	void call_shouldExposeTheReadCredentialAsGithubActorAndGithubToken_whenBindingIt() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// The services' build files read these two names, the same ones url-shortener-shared-libs publishes with.
+		def bindings = helper.callStack.findAll {
+			it.methodName == 'usernamePassword' && it.args[0].credentialsId == 'github-packages-read'
+		}.collect { it.args[0] }
+		assertThat(bindings).hasSize(2)
+		assertThat(bindings.every { it.usernameVariable == 'GITHUB_ACTOR' && it.passwordVariable == 'GITHUB_TOKEN' })
+				.isTrue()
+
+	}
+
+	@Test
+	void call_shouldPassTheCredentialToTheImageBuildAsBuildKitSecretsByVariableName_whenBuildingTheImage() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		def imageBuild = shCommands().find { it.contains('docker buildx build') }
+		assertThat(imageBuild).contains('--secret id=github_actor,env=GITHUB_ACTOR')
+		assertThat(imageBuild).contains('--secret id=github_token,env=GITHUB_TOKEN')
+		assertThat(credentialBoundTo(imageBuild)).isEqualTo('github-packages-read')
+		// By name, not by value: a value would put the token on the command line and in the process list.
+		assertThat(imageBuild).doesNotContain('$')
+
+	}
+
+	@Test
+	void call_shouldNotMountTheAgentsLocalMavenRepository_whenBuildingTheImage() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// The image build used to read the shared libs from the agent's /root/.m2, which the services no longer need.
+		def imageBuild = shCommands().find { it.contains('docker buildx build') }
+		assertThat(imageBuild).doesNotContain('--build-context')
+		assertThat(imageBuild).doesNotContain('.m2')
+
+	}
+
+	@Test
+	void call_shouldKeepTheReadCredentialOutOfTheGitOpsStage_whenBumpingTheImageTag() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		def gitOpsBump = shCommands().find { it.contains('git push') }
+		assertThat(credentialBoundTo(gitOpsBump)).isEqualTo('gitops-repo-push')
+
+	}
+
+	@Test
+	void call_shouldNeverUseThePublishCredential_whenBuildingAService() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// Building a service only reads the shared libs; the credential that can overwrite them stays with the publisher.
+		def usedCredentials = helper.callStack.findAll { it.methodName == 'usernamePassword' }.collect {
+			it.args[0].credentialsId
+		}
+		assertThat(usedCredentials).doesNotContain('github-packages-publish')
+
+	}
+
+	/**
+	 * The shell commands that were run, in order.
+	 */
+	private List<String> shCommands() {
+		return helper.callStack.findAll { methodCall ->
+			methodCall.methodName == 'sh'
+		}.collect { methodCall ->
+			methodCall.args[0] instanceof Map ? methodCall.args[0].script : methodCall.args[0]
+		}
+	}
+
+	/**
+	 * The ID of the credential binding the given shell command runs directly inside of, or null when it runs outside
+	 * any. Works from the call stack's depths: a command's parent is the nearest earlier call that is shallower than
+	 * it, and the binding's credential is the usernamePassword call recorded just before its withCredentials.
+	 */
+	private String credentialBoundTo(String command) {
+		def calls = helper.callStack
+		int shell = calls.findIndexOf { call ->
+			call.methodName == 'sh' && (call.args[0] instanceof Map ? call.args[0].script : call.args[0]) == command
+		}
+		assertThat(shell).as("the pipeline ran '${command}'").isGreaterThanOrEqualTo(0)
+
+		int parent = (shell - 1..0).find { calls[it].stackDepth < calls[shell].stackDepth }
+		if (calls[parent].methodName != 'withCredentials') {
+			return null
+		}
+		return calls[parent - 1].args[0].credentialsId
+	}
+
 }
