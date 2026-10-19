@@ -66,7 +66,12 @@ def call(Map config) {
 				steps {
 					container('docker') {
 						script {
-							env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+							// The commit the SCM checkout built, not the output of `git rev-parse` here: this container runs
+							// as root and the workspace belongs to the jenkins user, so git stops with "dubious ownership".
+							if (!env.GIT_COMMIT) {
+								error 'buildSpringBootService: GIT_COMMIT is not set, so there is no commit to tag the image with'
+							}
+							env.IMAGE_TAG = env.GIT_COMMIT.take(7)
 						}
 						// The Dockerfile's Gradle build reads the shared libs from GitHub Packages with these as BuildKit
 						// secrets. They are named by variable (env=), not passed by value, so the token never appears on
