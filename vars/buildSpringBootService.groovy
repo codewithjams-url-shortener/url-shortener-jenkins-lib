@@ -24,6 +24,9 @@ def call(Map config) {
 	final String registry = 'localhost:5100'
 	final String gitOpsRepoHost = 'github.com/codewithjams-url-shortener/url-shortener-gitops.git'
 	final String gitOpsCredentialsId = 'gitops-repo-push'
+	// Read-only (read:packages): the services only resolve the shared libs from GitHub Packages. Their build files read
+	// these two variable names, the same ones url-shortener-shared-libs publishes with.
+	final String githubPackagesCredentialsId = 'github-packages-read'
 
 	pipeline {
 
@@ -48,7 +51,13 @@ def call(Map config) {
 			stage('Build & Test') {
 				steps {
 					container('gradle') {
-						sh './gradlew clean build'
+						withCredentials([usernamePassword(
+								credentialsId: githubPackagesCredentialsId,
+								usernameVariable: 'GITHUB_ACTOR',
+								passwordVariable: 'GITHUB_TOKEN'
+						)]) {
+							sh './gradlew clean build'
+						}
 					}
 				}
 			}
@@ -59,12 +68,22 @@ def call(Map config) {
 						script {
 							env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
 						}
-						sh """
-							docker buildx build \
-								--build-context m2=/root/.m2 \
-								-t ${registry}/${dockerImage}:${env.IMAGE_TAG} \
-								--push .
-						"""
+						// The Dockerfile's Gradle build reads the shared libs from GitHub Packages with these as BuildKit
+						// secrets. They are named by variable (env=), not passed by value, so the token never appears on
+						// the command line or in an image layer.
+						withCredentials([usernamePassword(
+								credentialsId: githubPackagesCredentialsId,
+								usernameVariable: 'GITHUB_ACTOR',
+								passwordVariable: 'GITHUB_TOKEN'
+						)]) {
+							sh """
+								docker buildx build \
+									--secret id=github_actor,env=GITHUB_ACTOR \
+									--secret id=github_token,env=GITHUB_TOKEN \
+									-t ${registry}/${dockerImage}:${env.IMAGE_TAG} \
+									--push .
+							"""
+						}
 					}
 				}
 			}
