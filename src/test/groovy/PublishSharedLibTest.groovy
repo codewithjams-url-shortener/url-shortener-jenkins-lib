@@ -33,6 +33,28 @@ class PublishSharedLibTest extends DeclarativePipelineTest {
 	}
 
 	@Test
+	void call_shouldFollowTheRegistrysRedirect_whenCheckingWhetherEachModuleIsPublished() throws Exception {
+
+		// Arrange
+		givenRegistryAnswers('200', '200', '200')
+		def script = loadScript('vars/publishSharedLib.groovy')
+
+		// Act
+		script.call()
+
+		// Assert
+		// Regression: GitHub Packages answers an existing module with a 302 redirect to a signed download URL and only a
+		// followed redirect ends in the 200 this step accepts, so a check that does not follow it fails every build of an
+		// already published version with "unexpected HTTP 302".
+		def checks = shCommands().findAll { command -> command.contains('curl') }
+		assertThat(checks).hasSize(3)
+		assertThat(checks.every { command -> command =~ /curl\s+-\w*L/ })
+				.as('every registry check follows redirects')
+				.isTrue()
+
+	}
+
+	@Test
 	void call_shouldBuildTestThenPublish_whenNoModuleIsPublishedYet() throws Exception {
 
 		// Arrange

@@ -16,6 +16,56 @@ class BuildSpringBootServiceTest extends DeclarativePipelineTest {
 	@Before
 	void setUp() throws Exception {
 		super.setUp()
+		// The SCM checkout sets GIT_COMMIT, which is where the image tag comes from. `error` is replaced by one that
+		// throws, as Jenkins' does, since JenkinsPipelineUnit's own only records the call.
+		binding.setVariable('env', [GIT_COMMIT: 'abcdef0123456789'])
+		helper.registerAllowedMethod('error', [String]) { String message -> throw new RuntimeException(message) }
+	}
+
+	@Test
+	void call_shouldTagTheImageWithTheFirstSevenCharactersOfTheCommit_whenBuildingTheImage() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		def imageBuild = shCommands().find { it.contains('docker buildx build') }
+		assertThat(imageBuild).contains('-t localhost:5100/url-service:abcdef0')
+		assertThat(imageBuild).doesNotContain('abcdef01')
+
+	}
+
+	@Test
+	void call_shouldNotRunGitInTheDockerContainer_whenTaggingTheImage() throws Exception {
+
+		// Arrange
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act
+		script.call(serviceName: 'url-service')
+
+		// Assert
+		// Regression: `git rev-parse` in this container, which runs as root in a workspace owned by the jenkins user,
+		// stops with "detected dubious ownership" (exit 128) and fails every service build at this stage.
+		assertThat(shCommands().findAll { it.contains('git rev-parse') }).isEmpty()
+
+	}
+
+	@Test
+	void call_shouldFailBeforeBuildingTheImage_whenNoCommitIsKnown() throws Exception {
+
+		// Arrange
+		binding.setVariable('env', [:])
+		def script = loadScript('vars/buildSpringBootService.groovy')
+
+		// Act & Assert
+		org.assertj.core.api.Assertions.assertThatThrownBy { script.call(serviceName: 'url-service') }
+				.hasMessageContaining('GIT_COMMIT is not set')
+		assertThat(shCommands().findAll { it.contains('docker buildx build') }).isEmpty()
+
 	}
 
 	@Test

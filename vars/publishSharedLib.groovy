@@ -113,6 +113,9 @@ private void publishUnpublishedModules(final String registryUrl, final String gr
 /**
  * Asks the registry whether a module's POM for this version exists.
  *
+ * GitHub Packages answers an existing module with a 302 redirect to a signed download URL, so the check follows
+ * redirects (-L) and sees a 200; it does not send the credentials on to the other host. A missing module is a 404.
+ *
  * Anything other than a clear 200 or 404 (bad credentials, the registry down, no network) is an error, never
  * "not published": treating it as a miss would try to publish and either fail confusingly or hide the real problem.
  * The credentials are expanded by the shell from the environment, never interpolated into the script text.
@@ -121,7 +124,7 @@ private boolean isPublished(final String registryUrl, final String groupPath, fi
 							final String version) {
 	final String pomUrl = "${registryUrl}/${groupPath}/${module}/${version}/${module}-${version}.pom"
 	final String status = sh(
-			script: "curl -s -o /dev/null -w '%{http_code}' -u \"\$GITHUB_ACTOR:\$GITHUB_TOKEN\" ${pomUrl}",
+			script: "curl -sL -o /dev/null -w '%{http_code}' -u \"\$GITHUB_ACTOR:\$GITHUB_TOKEN\" ${pomUrl}",
 			returnStdout: true
 	).trim()
 	if (status == '200') {
