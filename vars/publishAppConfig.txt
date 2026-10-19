@@ -1,0 +1,30 @@
+Shared pipeline for a service's config repo: validate the config against its JSON Schema, publish
+it as a new AWS AppConfig hosted configuration version, and start a canary deployment of it. See
+ADR-0011 and ADR-0008 in the docs repo.
+
+Usage (the entire content of the consuming repo's Jenkinsfile):
+
+    publishAppConfig(serviceName: 'url-service')
+
+The repo is expected to hold environments/<environment>/config.json and schema/config-schema.json.
+The AppConfig resources are found by name, following ADR-0011: an Application named after the
+service, an Environment named after the target environment, and a "runtime-settings" Configuration
+Profile, deployed with AppConfig.Canary10Percent20Minutes. They are created by the appconfig
+Terraform module, not by this step.
+
+The step starts the deployment and finishes; it does not wait out the canary. Rolling back on an
+error spike is AppConfig's job, via the CloudWatch alarm tied to the deployment.
+
+Poll SCM builds every commit, so the step avoids needless rollouts: it does not republish a config
+identical to the latest hosted version, and does not redeploy a version that is already the latest
+deployment (so a version AppConfig rolled back is not retried until the config changes). A version
+that was published but never deployed is deployed by the next build.
+
+Parameters:
+  serviceName       (required) The service, e.g. "url-service": the AppConfig Application's name.
+  environment       The AppConfig Environment and environments/ directory. Default "local".
+  awsEndpointUrl    The AWS API endpoint. Default http://host.docker.internal:4566 (floci, as the
+                    local cluster's pods reach it). Pass "" for the real AWS endpoints.
+  awsRegion         Default us-west-2.
+  awsCredentialsId  Jenkins "username with password" credential holding an AWS access key id and
+                    secret. Default "appconfig-publish-aws". Pass "" to use the pod's own identity.
